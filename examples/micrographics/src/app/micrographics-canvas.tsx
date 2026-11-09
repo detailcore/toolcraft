@@ -85,9 +85,15 @@ export function MicrographicsCanvas(): React.JSX.Element {
   const placing = pendingTemplate !== null;
 
   React.useEffect(() => {
-    setSelectedIds((current) =>
-      current.filter((id) => scene.elements.some((element) => element.id === id)),
-    );
+    setSelectedIds((current) => {
+      const next = current.filter((id) =>
+        scene.elements.some((element) => element.id === id),
+      );
+      return next.length === current.length &&
+        next.every((id, index) => id === current[index])
+        ? current
+        : next;
+    });
     setTextEdit((current) =>
       current && scene.elements.some((element) => element.id === current.elementId)
         ? current
