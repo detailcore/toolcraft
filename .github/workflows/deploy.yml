@@ -9,6 +9,9 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "scripts/publish-site.sh"
+      - "scripts/publish-site.test.sh"
+      - "scripts/publish-site-fixture.mjs"
+      - "scripts/build-examples.mjs"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -25,6 +28,7 @@ env:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, toolcraft-deploy]
     timeout-minutes: 45
     steps:
