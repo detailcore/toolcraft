@@ -34,12 +34,28 @@ expect_fail() {
 
 no_snapshots() {
   local site="$1"
-  local -a staging=() previous=()
+  local -a staging=() previous=() failed=()
   shopt -s nullglob
-  staging=("$site".staging.*)
-  previous=("$site".previous.*)
+  staging=("$site"/.staging.*)
+  previous=("$site"/.previous.*)
+  failed=("$site"/.failed.*)
   shopt -u nullglob
-  [[ ${#staging[@]} -eq 0 && ${#previous[@]} -eq 0 ]]
+  [[ ${#staging[@]} -eq 0 && ${#previous[@]} -eq 0 && ${#failed[@]} -eq 0 ]]
+}
+
+seed_site() {
+  local site="$1"
+  mkdir -p "$site/demos"
+  printf '%s\n' old >"$site/demos/marker"
+  printf '%s\n' keep >"$site/keep"
+}
+
+expect_previous_site() {
+  local site="$1"
+  [[ "$(cat "$site/demos/marker")" == "old" ]]
+  [[ "$(cat "$site/keep")" == "keep" ]]
+  [[ ! -f "$site/demos/.publish-ok" ]]
+  no_snapshots "$site"
 }
 
 make_example() {
@@ -114,6 +130,15 @@ ok "SITE_ROOT and SITE_URL validation"
 [[ "$(location_path "/elsewhere/")" == "/elsewhere/" ]]
 ok "redirect location paths"
 
+SITE_URL="https://toolcraft.ermolaev.site"
+assert_redirect_location "/demos/"
+assert_redirect_location "https://toolcraft.ermolaev.site/demos"
+assert_redirect_location "https://Toolcraft.ermolaev.site/demos/"
+expect_fail "foreign redirect host" assert_redirect_location "https://evil.example/demos/"
+expect_fail "protocol-relative redirect" assert_redirect_location "//evil.example/demos/"
+unset SITE_URL
+ok "redirect must stay on SITE_URL"
+
 asset_dir="$(mktemp -d)"
 printf '%s\n' '<p>See /demos/glass/assets/app.js</p>' >"$asset_dir/loose.html"
 printf '%s\n' '<p>See /demos/axb/assets/app.js</p>' >"$asset_dir/wrong-dot.html"
@@ -153,8 +178,7 @@ ok "missing dist does not publish"
 bad_base_root="$(mktemp -d)"
 bad_base_parent="$(mktemp -d)"
 bad_base_site="$bad_base_parent/site"
-mkdir -p "$bad_base_site"
-echo old >"$bad_base_site/marker"
+seed_site "$bad_base_site"
 make_example "$bad_base_root" "glass" "<p>/demos/glass/assets/app.js</p>"
 (
   PUBLISH_ROOT="$bad_base_root"
@@ -163,22 +187,20 @@ make_example "$bad_base_root" "glass" "<p>/demos/glass/assets/app.js</p>"
   SITE_URL="http://127.0.0.1:9"
   publish_site_main
 ) && fail "text mention of the base path should fail"
-[[ "$(cat "$bad_base_site/marker")" == "old" ]]
-no_snapshots "$bad_base_site"
+expect_previous_site "$bad_base_site"
 ok "Vite base must be a script or stylesheet URL"
 
 second_mv_root="$(mktemp -d)"
 second_mv_parent="$(mktemp -d)"
 second_mv_site="$second_mv_parent/site"
-mkdir -p "$second_mv_site"
-echo old >"$second_mv_site/marker"
+seed_site "$second_mv_site"
 prepare_repo "$second_mv_root" "glass"
 (
   PUBLISH_ROOT="$second_mv_root"
   DIST_SITE="$second_mv_root/dist-site"
   SITE_ROOT="$second_mv_site"
   move_into_place() {
-    if [[ "${2:-}" == "$SITE_ROOT" ]]; then
+    if [[ "${2:-}" == "$SITE_ROOT/demos" ]]; then
       echo "injected failure to move staging into place" >&2
       return 1
     fi
@@ -191,15 +213,13 @@ prepare_repo "$second_mv_root" "glass"
   stage_dist "$DIST_SITE"
   activate_staged_tree
 ) && fail "second mv should fail"
-[[ "$(cat "$second_mv_site/marker")" == "old" ]]
-no_snapshots "$second_mv_site"
-ok "failed second mv restores the live site"
+expect_previous_site "$second_mv_site"
+ok "failed second mv restores the live demos tree"
 
 signal_root="$(mktemp -d)"
 signal_parent="$(mktemp -d)"
 signal_site="$signal_parent/site"
-mkdir -p "$signal_site"
-echo old >"$signal_site/marker"
+seed_site "$signal_site"
 prepare_repo "$signal_root" "glass"
 (
   PUBLISH_ROOT="$signal_root"
@@ -213,45 +233,71 @@ prepare_repo "$signal_root" "glass"
   stage_dist "$DIST_SITE"
   activate_staged_tree
 ) && fail "SIGTERM between renames should abort"
-[[ "$(cat "$signal_site/marker")" == "old" ]]
-no_snapshots "$signal_site"
-ok "SIGTERM between renames restores the live site"
+expect_previous_site "$signal_site"
+ok "SIGTERM between renames restores the live demos tree"
 
 orphan_parent="$(mktemp -d)"
 orphan_site="$orphan_parent/site"
-mkdir -p "$orphan_site.previous.999"
-echo old >"$orphan_site.previous.999/marker"
+mkdir -p "$orphan_site/.previous.999"
+echo old >"$orphan_site/.previous.999/marker"
 (
   SITE_ROOT="$orphan_site"
   recover_orphaned_previous
 )
-[[ "$(cat "$orphan_site/marker")" == "old" ]]
-[[ ! -e "$orphan_site.previous.999" ]]
+[[ "$(cat "$orphan_site/demos/marker")" == "old" ]]
+[[ ! -e "$orphan_site/.previous.999" ]]
 ok "orphaned previous snapshot is restored"
 
 live_parent="$(mktemp -d)"
 live_site="$live_parent/site"
-mkdir -p "$live_site" "$live_site.previous.999"
-echo live >"$live_site/marker"
-echo stale >"$live_site.previous.999/marker"
+mkdir -p "$live_site/demos" "$live_site/.previous.999"
+printf '%s\n' ok >"$live_site/demos/.publish-ok"
+echo live >"$live_site/demos/marker"
+echo stale >"$live_site/.previous.999/marker"
 (
   SITE_ROOT="$live_site"
   recover_orphaned_previous
 )
-[[ "$(cat "$live_site/marker")" == "live" ]]
-[[ ! -e "$live_site.previous.999" ]]
-ok "leftover previous snapshot is removed when the live root exists"
+[[ "$(cat "$live_site/demos/marker")" == "live" ]]
+[[ ! -e "$live_site/.previous.999" ]]
+ok "leftover previous snapshot is removed when the live demos tree is committed"
+
+uncommitted_parent="$(mktemp -d)"
+uncommitted_site="$uncommitted_parent/site"
+mkdir -p "$uncommitted_site/demos" "$uncommitted_site/.previous.7"
+echo bad >"$uncommitted_site/demos/marker"
+echo good >"$uncommitted_site/.previous.7/marker"
+printf '%s\n' ok >"$uncommitted_site/.previous.7/.publish-ok"
+(
+  SITE_ROOT="$uncommitted_site"
+  recover_orphaned_previous
+)
+[[ "$(cat "$uncommitted_site/demos/marker")" == "good" ]]
+[[ -f "$uncommitted_site/demos/.publish-ok" ]]
+[[ ! -e "$uncommitted_site/.previous.7" ]]
+ok "uncommitted demos tree is replaced by the previous snapshot"
+
+initial_parent="$(mktemp -d)"
+initial_site="$initial_parent/site"
+mkdir -p "$initial_site/demos"
+echo hand >"$initial_site/demos/marker"
+(
+  SITE_ROOT="$initial_site"
+  recover_orphaned_previous
+)
+[[ "$(cat "$initial_site/demos/marker")" == "hand" ]]
+ok "initial demos tree without a snapshot is left in place"
 
 many_parent="$(mktemp -d)"
 many_site="$many_parent/site"
-mkdir -p "$many_site.previous.1" "$many_site.previous.2"
+mkdir -p "$many_site/.previous.1" "$many_site/.previous.2"
 if (
   SITE_ROOT="$many_site"
   recover_orphaned_previous
 ); then
   fail "multiple orphaned snapshots should fail"
 fi
-[[ -d "$many_site.previous.1" && -d "$many_site.previous.2" && ! -e "$many_site" ]]
+[[ -d "$many_site/.previous.1" && -d "$many_site/.previous.2" && ! -e "$many_site/demos" ]]
 ok "multiple orphaned snapshots stay untouched"
 
 if ln -s "$live_site" "$live_parent/link-site" 2>/dev/null && [[ -L "$live_parent/link-site" ]]; then
@@ -268,8 +314,8 @@ fi
 success_tmp="$(mktemp -d)"
 success_root="$success_tmp/repo"
 success_site="$success_tmp/www/site"
-mkdir -p "$success_tmp/www" "$success_site"
-echo old >"$success_site/marker"
+mkdir -p "$success_tmp/www"
+seed_site "$success_site"
 prepare_repo "$success_root" "glass" "a.b"
 success_port="$(start_server "$success_site" "ok")"
 (
@@ -279,21 +325,23 @@ success_port="$(start_server "$success_site" "ok")"
   SITE_URL="http://127.0.0.1:${success_port}"
   publish_site_main
 )
-[[ ! -f "$success_site/marker" ]]
+[[ "$(cat "$success_site/keep")" == "keep" ]]
+[[ ! -f "$success_site/demos/marker" ]]
 [[ ! -f "$success_site/index.html" ]]
+[[ -f "$success_site/demos/.publish-ok" ]]
 grep -Fq '<ol>' "$success_site/demos/index.html"
 grep -Fq '<li><a href="/demos/glass/">/demos/glass/</a></li>' "$success_site/demos/index.html"
 grep -Fq '<li><a href="/demos/a.b/">/demos/a.b/</a></li>' "$success_site/demos/index.html"
 grep -Fq '/demos/glass/assets/app.js' "$success_site/demos/glass/index.html"
 [[ -f "$success_site/demos/a.b/assets/app.js" ]]
 no_snapshots "$success_site"
-ok "successful publish keeps the new tree and drops the previous snapshot"
+ok "successful publish keeps the new demos tree and drops the previous snapshot"
 
 rollback_tmp="$(mktemp -d)"
 rollback_root="$rollback_tmp/repo"
 rollback_site="$rollback_tmp/www/site"
-mkdir -p "$rollback_tmp/www" "$rollback_site"
-echo old >"$rollback_site/marker"
+mkdir -p "$rollback_tmp/www"
+seed_site "$rollback_site"
 prepare_repo "$rollback_root" "glass" "a.b"
 rollback_port="$(start_server "$rollback_site" "bad-asset")"
 (
@@ -303,15 +351,31 @@ rollback_port="$(start_server "$rollback_site" "bad-asset")"
   SITE_URL="http://127.0.0.1:${rollback_port}"
   publish_site_main
 ) && fail "missing asset should fail smoke"
-[[ "$(cat "$rollback_site/marker")" == "old" ]]
-no_snapshots "$rollback_site"
-ok "failed asset smoke restores the previous site"
+expect_previous_site "$rollback_site"
+ok "failed asset smoke restores the previous demos tree"
+
+fallback_tmp="$(mktemp -d)"
+fallback_root="$fallback_tmp/repo"
+fallback_site="$fallback_tmp/www/site"
+mkdir -p "$fallback_tmp/www"
+seed_site "$fallback_site"
+prepare_repo "$fallback_root" "glass"
+fallback_port="$(start_server "$fallback_site" "spa-fallback")"
+(
+  PUBLISH_ROOT="$fallback_root"
+  DIST_SITE="$fallback_root/dist-site"
+  SITE_ROOT="$fallback_site"
+  SITE_URL="http://127.0.0.1:${fallback_port}"
+  publish_site_main
+) && fail "HTML asset response should fail smoke"
+expect_previous_site "$fallback_site"
+ok "SPA HTML served as an asset restores the previous demos tree"
 
 noredir_tmp="$(mktemp -d)"
 noredir_root="$noredir_tmp/repo"
 noredir_site="$noredir_tmp/www/site"
-mkdir -p "$noredir_tmp/www" "$noredir_site"
-echo old >"$noredir_site/marker"
+mkdir -p "$noredir_tmp/www"
+seed_site "$noredir_site"
 prepare_repo "$noredir_root" "glass"
 noredir_port="$(start_server "$noredir_site" "no-redirect")"
 (
@@ -321,15 +385,14 @@ noredir_port="$(start_server "$noredir_site" "no-redirect")"
   SITE_URL="http://127.0.0.1:${noredir_port}"
   publish_site_main
 ) && fail "HTTP 200 at / should fail smoke"
-[[ "$(cat "$noredir_site/marker")" == "old" ]]
-no_snapshots "$noredir_site"
-ok "root without an HTTP redirect restores the previous site"
+expect_previous_site "$noredir_site"
+ok "root without an HTTP redirect restores the previous demos tree"
 
 badloc_tmp="$(mktemp -d)"
 badloc_root="$badloc_tmp/repo"
 badloc_site="$badloc_tmp/www/site"
-mkdir -p "$badloc_tmp/www" "$badloc_site"
-echo old >"$badloc_site/marker"
+mkdir -p "$badloc_tmp/www"
+seed_site "$badloc_site"
 prepare_repo "$badloc_root" "glass"
 badloc_port="$(start_server "$badloc_site" "bad-location")"
 (
@@ -339,8 +402,24 @@ badloc_port="$(start_server "$badloc_site" "bad-location")"
   SITE_URL="http://127.0.0.1:${badloc_port}"
   publish_site_main
 ) && fail "redirect to the wrong path should fail smoke"
-[[ "$(cat "$badloc_site/marker")" == "old" ]]
-no_snapshots "$badloc_site"
-ok "wrong redirect location restores the previous site"
+expect_previous_site "$badloc_site"
+ok "wrong redirect location restores the previous demos tree"
+
+foreign_tmp="$(mktemp -d)"
+foreign_root="$foreign_tmp/repo"
+foreign_site="$foreign_tmp/www/site"
+mkdir -p "$foreign_tmp/www"
+seed_site "$foreign_site"
+prepare_repo "$foreign_root" "glass"
+foreign_port="$(start_server "$foreign_site" "foreign-host")"
+(
+  PUBLISH_ROOT="$foreign_root"
+  DIST_SITE="$foreign_root/dist-site"
+  SITE_ROOT="$foreign_site"
+  SITE_URL="http://127.0.0.1:${foreign_port}"
+  publish_site_main
+) && fail "redirect to another host should fail smoke"
+expect_previous_site "$foreign_site"
+ok "redirect to another host restores the previous demos tree"
 
 echo "publish-site tests passed"
