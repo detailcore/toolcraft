@@ -9,6 +9,7 @@ import { defineConfig, type Plugin } from "vite";
 import { loadToolcraftRendererVitePlugins } from "./scripts/toolcraft-renderer-vite-plugins.mjs";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
+const demoBasePath = "/demos/neon-globe/";
 const toolcraftServerIdentityPath = "/.toolcraft/server-identity.json";
 const testDependencyRoot = process.env.TOOLCRAFT_TEST_DEPENDENCY_ROOT;
 
@@ -62,7 +63,8 @@ function toolcraftServerIdentityPlugin(): Plugin {
   };
 }
 
-export default defineConfig(async () => ({
+export default defineConfig(async ({ command, isPreview }) => ({
+  base: command === "build" || isPreview ? demoBasePath : "/",
   plugins: [
     ...(await loadToolcraftRendererVitePlugins({ appRoot: rootDir })),
     toolcraftServerIdentityPlugin(),

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
+const demoBasePath = "/demos/logo-sphere/";
 const toolcraftServerIdentityPath = "/.toolcraft/server-identity.json";
 const testDependencyRoot = process.env.TOOLCRAFT_TEST_DEPENDENCY_ROOT;
 
@@ -60,7 +61,8 @@ function toolcraftServerIdentityPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command, isPreview }) => ({
+  base: command === "build" || isPreview ? demoBasePath : "/",
   plugins: [toolcraftServerIdentityPlugin(), tailwindcss(), react()],
   server: testDependencyRoot
     ? {
@@ -74,4 +76,4 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-});
+}));
