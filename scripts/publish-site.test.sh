@@ -281,8 +281,9 @@ success_port="$(start_server "$success_site" "ok")"
 )
 [[ ! -f "$success_site/marker" ]]
 [[ ! -f "$success_site/index.html" ]]
-grep -Fq 'href="/demos/glass/"' "$success_site/demos/index.html"
-grep -Fq 'href="/demos/a.b/"' "$success_site/demos/index.html"
+grep -Fq '<ol>' "$success_site/demos/index.html"
+grep -Fq '<li><a href="/demos/glass/">/demos/glass/</a></li>' "$success_site/demos/index.html"
+grep -Fq '<li><a href="/demos/a.b/">/demos/a.b/</a></li>' "$success_site/demos/index.html"
 grep -Fq '/demos/glass/assets/app.js' "$success_site/demos/glass/index.html"
 [[ -f "$success_site/demos/a.b/assets/app.js" ]]
 no_snapshots "$success_site"

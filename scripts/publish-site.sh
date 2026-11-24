@@ -183,13 +183,13 @@ write_dist_site() {
   rm -rf -- "$dest" || return 1
   mkdir -p "$dest/demos" || return 1
   {
-    printf '%s\n' '<!doctype html><title>Toolcraft demos</title><h1>demos</h1><ul>' || return 1
+    printf '%s\n' '<!doctype html><title>Toolcraft demos</title><h1>demos</h1><ol>' || return 1
     for name in "${PUBLISH_DEMOS[@]}"; do
       mkdir -p "$dest/demos/$name" || return 1
       cp -a "$root/examples/$name/dist/." "$dest/demos/$name/" || return 1
-      printf '<li><a href="/demos/%s/">%s</a></li>\n' "$name" "$name" || return 1
+      printf '<li><a href="/demos/%s/">/demos/%s/</a></li>\n' "$name" "$name" || return 1
     done
-    printf '%s\n' '</ul>' || return 1
+    printf '%s\n' '</ol>' || return 1
   } >"$dest/demos/index.html"
 }
 
