@@ -37,24 +37,51 @@ if (names.length === 0) {
 }
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const win32 = process.platform === "win32";
 let next = 0;
 let failed = false;
 
-function buildExample(name) {
-  const base = `/demos/${name}/`;
-  console.log(`build ${name} --base ${base}`);
+function runPnpm(args) {
   return new Promise((resolve) => {
-    const child = spawn(
-      pnpm,
-      ["--filter", `./examples/${name}`, "run", "build", "--", "--base", base],
-      { cwd: root, stdio: "inherit", shell: process.platform === "win32" },
-    );
+    const child = spawn(pnpm, args, {
+      cwd: root,
+      stdio: "inherit",
+      shell: win32,
+      // Git-Bash on Windows rewrites leading-/ args into the Git install path.
+      env: win32
+        ? { ...process.env, MSYS_NO_PATHCONV: "1", MSYS2_ARG_CONV_EXCL: "*" }
+        : process.env,
+    });
     child.on("error", (error) => {
-      console.error(`error: failed to start build for ${name}: ${error.message}`);
+      console.error(`error: failed to start ${args.join(" ")}: ${error.message}`);
       resolve(1);
     });
     child.on("exit", (code) => resolve(code ?? 1));
   });
+}
+
+async function buildExample(name) {
+  const base = `/demos/${name}/`;
+  console.log(`build ${name} --base ${base}`);
+  // pnpm run forwards extras as `vite build -- --base …` for `tsc && vite build`
+  // scripts; Vite then ignores --base. Typecheck via the package script, then call
+  // vite with real CLI flags.
+  const typecheck = await runPnpm([
+    "--filter",
+    `./examples/${name}`,
+    "run",
+    "typecheck",
+  ]);
+  if (typecheck !== 0) return typecheck;
+  return runPnpm([
+    "--filter",
+    `./examples/${name}`,
+    "exec",
+    "vite",
+    "build",
+    "--base",
+    base,
+  ]);
 }
 
 async function worker() {
