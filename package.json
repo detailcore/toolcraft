@@ -1,0 +1,14 @@
+{
+  "name": "toolcraft-monorepo",
+  "private": true,
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": ">=12 <13",
+      "onFail": "error"
+    }
+  },
+  "scripts": {
+    "build:examples": "pnpm -r --filter \"./examples/*\" run build"
+  }
+}

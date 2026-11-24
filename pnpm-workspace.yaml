@@ -1,0 +1,6 @@
+packages:
+  - "starter"
+  - "examples/*"
+
+allowBuilds:
+  esbuild: true

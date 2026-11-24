@@ -3,7 +3,6 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@10.11.0",
   "scripts": {
     "ai:check": "node scripts/check-toolcraft-code-health.mjs",
     "dev": "node scripts/run-vite-on-free-port.mjs dev",
