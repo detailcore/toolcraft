@@ -21,6 +21,7 @@ permissions:
 
 env:
   SITE_ROOT: /var/www/toolcraft.ermolaev.site
+  SITE_URL: https://toolcraft.ermolaev.site
 
 jobs:
   deploy:
@@ -38,6 +39,9 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Test site publish
+        run: bash scripts/publish-site.test.sh
+
       - run: pnpm install --frozen-lockfile
 
       - name: Build examples
@@ -47,12 +51,4 @@ jobs:
         run: bash scripts/publish-site.sh
         env:
           SITE_ROOT: ${{ env.SITE_ROOT }}
-
-      - name: Smoke check published demos
-        run: |
-          set -euo pipefail
-          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/"
-          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/demos/"
-          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/demos/glass/"
-          curl -fsS "https://toolcraft.ermolaev.site/demos/aura-carousel/" | grep -Fq "/demos/aura-carousel/"
-          curl -fsS "https://toolcraft.ermolaev.site/demos/neon-globe/" | grep -Fq "/demos/neon-globe/"
+          SITE_URL: ${{ env.SITE_URL }}

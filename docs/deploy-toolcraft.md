@@ -105,21 +105,23 @@ flowchart LR
 
 | Триггер | Действие |
 | --- | --- |
-| `push` в `main` (paths: examples, lockfile, publish script, workflow) | сборка + выкладка |
+| `push` в `main` (paths: examples, lockfile, `scripts/publish-site.sh`, workflow) | сборка + выкладка |
 | `workflow_dispatch` | то же вручную |
 
 Шаги на runner:
 
 1. `actions/checkout@v7`
 2. `pnpm/action-setup@v6` + `actions/setup-node@v7` (pnpm 12, Node 24)
-3. `pnpm install --frozen-lockfile`
-4. `pnpm run build:examples` — все `examples/*`, `--workspace-concurrency=2`
-5. `SITE_ROOT=… bash scripts/publish-site.sh` — проверка `dist` + Vite base, сборка `dist-site/`, atomic swap в `$SITE_ROOT`
-6. Smoke: `curl` корня, `/demos/`, `/demos/glass/`, проверка base у aura-carousel и neon-globe
+3. `bash scripts/publish-site.test.sh`
+4. `pnpm install --frozen-lockfile`
+5. `pnpm run build:examples` — все `examples/*`, `--workspace-concurrency=2`
+6. `SITE_ROOT=… SITE_URL=… bash scripts/publish-site.sh` — проверка `dist` и URL скрипта/стиля, сборка `dist-site/`, swap, smoke всех демо и их `.js`/`.css`
 
-`SITE_ROOT` задаётся только в workflow (скрипт без него не запускается).
+`SITE_ROOT` и `SITE_URL` задаются в workflow. Без них скрипт не публикует. `SITE_ROOT` — абсолютный путь без завершающего слэша, не `/` и без сегментов `.` / `..`. `SITE_URL` — origin без пути, например `https://toolcraft.ermolaev.site`.
 
-Выкладка atomic: staging рядом с root → `mv` старого в `*.previous` → `mv` staging на место → удаление previous. Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`).
+Выкладка: staging рядом с корнем → `mv` текущего корня в `$SITE_ROOT.previous.<pid>` → `mv` staging на место. Если процесс обрывается между этими `mv`, ловушка `EXIT` возвращает previous и удаляет staging, когда корень уже на месте. Smoke идёт по `SITE_URL` до удаления previous: первый ответ `/` должен быть HTTP-редирект на `/demos/`, затем каталог, каждая демо-страница и её `.js` или `.css`. Ошибка smoke возвращает предыдущее дерево. Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`).
+
+Корень `/` в файлы сайта не записывается. Редирект делает origin Nginx: `location = / { return 302 /demos/; }`.
 
 Reload Nginx после выкладки статики **не** нужен.
 
@@ -148,8 +150,12 @@ pnpm --filter glass run build
 
 ```bash
 pnpm run build:examples
-SITE_ROOT=/var/www/toolcraft.ermolaev.site bash scripts/publish-site.sh
+SITE_ROOT=/var/www/toolcraft.ermolaev.site \
+SITE_URL=https://toolcraft.ermolaev.site \
+bash scripts/publish-site.sh
 ```
+
+Проверка самого скрипта публикации, без сборки examples: `pnpm test:publish-site`.
 
 ---
 
@@ -163,7 +169,7 @@ curl -sI https://toolcraft.ermolaev.site/demos/glass/ | head
 curl -sI https://toolcraft.ermolaev.site/demos/ | head
 ```
 
-В браузере: `https://toolcraft.ermolaev.site/` (редирект на `/demos/`), `…/demos/glass/`, `…/demos/ascii/`.
+У `/` ожидается `301`, `302`, `307` или `308` и `Location` с путём `/demos/`. В браузере: `https://toolcraft.ermolaev.site/` открывает `/demos/`, дальше `…/demos/glass/`, `…/demos/ascii/`.
 
 Кэш HIT на `.js`/`.css` и отсутствие долгого HIT на HTML — на стороне VPS; детали в server-инструкции.
 
