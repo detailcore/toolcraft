@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
-const demoBasePath = "/demos/editorial-pattern-studio/";
 const toolcraftServerIdentityPath = "/.toolcraft/server-identity.json";
 
 function readHtmlAppTitle(source: string): string | null {
@@ -60,12 +59,11 @@ function toolcraftServerIdentityPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ command, isPreview }) => ({
-  base: command === "build" || isPreview ? demoBasePath : "/",
+export default defineConfig({
   plugins: [toolcraftServerIdentityPlugin(), tailwindcss(), react()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-}));
+});

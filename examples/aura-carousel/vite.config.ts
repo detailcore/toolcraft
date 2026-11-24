@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
-const demoBasePath = "/demos/aura-carousel/";
 const toolcraftServerIdentityPath = "/.toolcraft/server-identity.json";
 const testDependencyRoot = process.env.TOOLCRAFT_TEST_DEPENDENCY_ROOT;
 
@@ -61,8 +60,7 @@ function toolcraftServerIdentityPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ command, isPreview }) => ({
-  base: command === "build" || isPreview ? demoBasePath : "/",
+export default defineConfig({
   plugins: [toolcraftServerIdentityPlugin(), tailwindcss(), react()],
   server: testDependencyRoot
     ? {
@@ -76,4 +74,4 @@ export default defineConfig(({ command, isPreview }) => ({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-}));
+});

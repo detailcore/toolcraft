@@ -3,13 +3,11 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
-const demoBasePath = "/demos/vesta-split-flap/";
-export default defineConfig(({ command, isPreview }) => ({
-  base: command === "build" || isPreview ? demoBasePath : "/",
+export default defineConfig({
   plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-}));
+});
