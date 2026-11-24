@@ -3,6 +3,13 @@ name: Build and deploy
 on:
   push:
     branches: [main]
+    paths:
+      - "examples/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/publish-site.sh"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 concurrency:
@@ -11,6 +18,9 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  SITE_ROOT: /var/www/toolcraft.ermolaev.site
 
 jobs:
   deploy:
@@ -30,7 +40,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm run build:examples
+      - name: Build examples
+        run: pnpm run build:examples
 
-      - name: Publish to /var/www/toolcraft.ermolaev.site
+      - name: Publish to ${{ env.SITE_ROOT }}
         run: bash scripts/publish-site.sh
+        env:
+          SITE_ROOT: ${{ env.SITE_ROOT }}
+
+      - name: Smoke check published demos
+        run: |
+          set -euo pipefail
+          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/"
+          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/demos/"
+          curl -fsS -o /dev/null "https://toolcraft.ermolaev.site/demos/glass/"
+          curl -fsS "https://toolcraft.ermolaev.site/demos/aura-carousel/" | grep -Fq "/demos/aura-carousel/"
+          curl -fsS "https://toolcraft.ermolaev.site/demos/neon-globe/" | grep -Fq "/demos/neon-globe/"

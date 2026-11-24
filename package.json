@@ -9,6 +9,6 @@
     }
   },
   "scripts": {
-    "build:examples": "pnpm -r --filter \"./examples/*\" run build"
+    "build:examples": "pnpm -r --workspace-concurrency=2 --filter \"./examples/*\" run build"
   }
 }

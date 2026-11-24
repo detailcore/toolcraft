@@ -14,7 +14,7 @@
 | Origin root | `/var/www/toolcraft.ermolaev.site/` |
 | Выкладка | GitHub Actions → self-hosted runner на origin (`toolcraft-deploy`) |
 
-Vite `base` в examples: `/demos/<folder>/` (или `vercel.json` `build --base …`). Префикс `demos` не убирать.
+В каждом example Vite `base` на build/preview: `/demos/<folder>/` (`demoBasePath` в `vite.config`). Префикс `demos` не убирать. `vercel.json` `build --base` — только для Vercel, CI его не использует.
 
 Сначала один раз поднимите сайт по инструкции в server (DNS → origin vhost → VPS certbot/HTTPS), затем этот файл.
 
@@ -55,7 +55,7 @@ sudo chown -R toolcraft-deploy:www-data /var/www/toolcraft.ermolaev.site
 sudo chmod -R u+rwX,g+rX,o+rX /var/www/toolcraft.ermolaev.site
 ```
 
-Пишет только **`toolcraft-deploy`**, без `sudo rsync`. Отдельного sudoers не нужно.  
+Пишет только **`toolcraft-deploy`**, без `sudo`. Отдельного sudoers не нужно.  
 Nginx читает от **`www-data`**.
 
 На origin уже должен быть Node (как для `uno`); job дополнительно ставит Node 24 и pnpm 12 через Actions от имени `toolcraft-deploy`.
@@ -105,7 +105,7 @@ flowchart LR
 
 | Триггер | Действие |
 | --- | --- |
-| `push` в `main` | сборка + выкладка от `toolcraft-deploy` |
+| `push` в `main` (paths: examples, lockfile, publish script, workflow) | сборка + выкладка |
 | `workflow_dispatch` | то же вручную |
 
 Шаги на runner:
@@ -113,10 +113,13 @@ flowchart LR
 1. `actions/checkout@v7`
 2. `pnpm/action-setup@v6` + `actions/setup-node@v7` (pnpm 12, Node 24)
 3. `pnpm install --frozen-lockfile`
-4. `pnpm run build:examples` (все `examples/*`)
-5. `bash scripts/publish-site.sh` — `dist-site/demos/<name>/` и `rsync --delete` в `/var/www/toolcraft.ermolaev.site/`
+4. `pnpm run build:examples` — все `examples/*`, `--workspace-concurrency=2`
+5. `SITE_ROOT=… bash scripts/publish-site.sh` — проверка `dist` + Vite base, сборка `dist-site/`, atomic swap в `$SITE_ROOT`
+6. Smoke: `curl` корня, `/demos/`, `/demos/glass/`, проверка base у aura-carousel и neon-globe
 
-Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`), чтобы `rsync --delete` не оборвался на половине дерева.
+`SITE_ROOT` задаётся только в workflow (скрипт без него не запускается).
+
+Выкладка atomic: staging рядом с root → `mv` старого в `*.previous` → `mv` staging на место → удаление previous. Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`).
 
 Reload Nginx после выкладки статики **не** нужен.
 
@@ -139,7 +142,14 @@ Reload Nginx после выкладки статики **не** нужен.
 pnpm --filter glass run build
 ```
 
-Новый example: папка `examples/<name>` с `base: /demos/<name>/` → push в `main`. Отдельный vhost и DNS не нужны (см. server-инструкцию).
+Новый example: папка `examples/<name>` с `demoBasePath = "/demos/<name>/"` в `vite.config` → push в `main`. Отдельный vhost и DNS не нужны (см. server-инструкцию).
+
+Локальная выкладка на origin (редко):
+
+```bash
+pnpm run build:examples
+SITE_ROOT=/var/www/toolcraft.ermolaev.site bash scripts/publish-site.sh
+```
 
 ---
 
@@ -148,11 +158,12 @@ pnpm --filter glass run build
 После успешного workflow (и готовой инфраструктуры):
 
 ```bash
+curl -sI https://toolcraft.ermolaev.site/ | head
 curl -sI https://toolcraft.ermolaev.site/demos/glass/ | head
 curl -sI https://toolcraft.ermolaev.site/demos/ | head
 ```
 
-В браузере: `https://toolcraft.ermolaev.site/demos/glass/`, `…/demos/ascii/`.
+В браузере: `https://toolcraft.ermolaev.site/` (редирект на `/demos/`), `…/demos/glass/`, `…/demos/ascii/`.
 
 Кэш HIT на `.js`/`.css` и отсутствие долгого HIT на HTML — на стороне VPS; детали в server-инструкции.
 
