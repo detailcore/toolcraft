@@ -33,19 +33,9 @@ function send(res, status, headers, body) {
 
 const server = http.createServer((req, res) => {
   const urlPath = (req.url ?? "/").split("?")[0];
-  if (urlPath === "/") {
-    if (mode === "no-redirect") {
-      send(res, 200, { "Content-Type": "text/html; charset=utf-8" }, "<!doctype html><p>no redirect</p>");
-      return;
-    }
-    const location =
-      mode === "bad-location"
-        ? "/elsewhere/"
-        : mode === "foreign-host"
-          ? "https://evil.example/demos/"
-          : "/demos/";
-    res.writeHead(302, { Location: location });
-    res.end();
+
+  if (mode === "missing-root" && (urlPath === "/" || urlPath === "")) {
+    send(res, 404, { "Content-Type": "text/plain; charset=utf-8" }, "missing");
     return;
   }
 
@@ -56,7 +46,7 @@ const server = http.createServer((req, res) => {
 
   if (mode === "spa-fallback" && /\.(js|css)$/.test(urlPath)) {
     const parts = urlPath.split("/").filter(Boolean);
-    const indexPath = parts.length >= 2 ? `/${parts[0]}/${parts[1]}/index.html` : "/index.html";
+    const indexPath = parts.length >= 1 ? `/${parts[0]}/index.html` : "/index.html";
     const indexFile = fileFor(indexPath);
     const body =
       indexFile && fs.existsSync(indexFile) && fs.statSync(indexFile).isFile()

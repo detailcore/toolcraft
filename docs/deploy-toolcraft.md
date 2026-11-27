@@ -1,20 +1,30 @@
 # Деплой Toolcraft на `toolcraft.ermolaev.site`
 
-Публикация example-приложений: сборка monorepo и выкладка на origin.  
-Инфраструктура (DNS, SAN, Nginx на origin и VPS) — в репозитории server:  
-`G:\domains\server\servers\toolcraft.ermolaev.site.md` (локально) / `servers/toolcraft.ermolaev.site.md` в том репозитории.
+Публикация example-приложений: сборка monorepo и выкладка на origin.
+
+Инфраструктура (DNS, SAN, Nginx) **не в этом репозитории** — локально в `G:\domains\server` (репозиторий server):
+
+| Что | Путь в `G:\domains\server` |
+| --- | --- |
+| Инструкция | `servers/toolcraft.ermolaev.site.md` |
+| Origin vhost | `servers/home-nginx/sites-available/toolcraft.ermolaev.site` |
+| VPS vhost | `servers/vps-nginx (https)/sites-available/toolcraft.ermolaev.site` |
+
+Правки nginx — там, затем копирование на origin/VPS и `nginx -t` + reload. Workflow и `scripts/publish-site.sh` в toolcraft только собирают и кладут статику в `/var/www/toolcraft.ermolaev.site`.
 
 ## Цель
 
 | Что | Значение |
 | --- | --- |
 | Домен | `toolcraft.ermolaev.site` |
-| URL приложения | `https://toolcraft.ermolaev.site/demos/<имя-папки>/` |
-| Пример | `https://toolcraft.ermolaev.site/demos/glass/` |
+| URL каталога | `https://toolcraft.ermolaev.site/` |
+| URL приложения | `https://toolcraft.ermolaev.site/<имя-папки>/` |
+| Пример | `https://toolcraft.ermolaev.site/glass/` |
 | Origin root | `/var/www/toolcraft.ermolaev.site/` |
+| Nginx-конфиги / DNS | `G:\domains\server` (см. таблицу выше) |
 | Выкладка | GitHub Actions → self-hosted runner на origin (`toolcraft-deploy`) |
 
-Префикс `demos` не убирать. CI собирает каждый example с `--base /demos/<папка>/`. `vercel.json` передаёт тот же `--base` на Vercel. Подписанный `vite.config.ts` для этого не правят: аргумент CLI перекрывает `base` в конфиге. У части старых examples `base` уже задан в конфиге — его оставляют.
+Каталог на `/`, демо на `/<папка>/`. Старые URL `/demos/…` на origin редиректят без префикса. CI собирает каждый example с `--base /<папка>/`. Отдельные `vercel.json` у examples по-прежнему могут указывать `/demos/<папка>/` для Vercel — сайт их не использует: `scripts/build-examples.mjs` передаёт `--base` через CLI. Подписанный `vite.config.ts` для этого не правят: аргумент CLI перекрывает `base` в конфиге.
 
 Сначала один раз поднимите сайт по инструкции в server (DNS → origin vhost → VPS certbot/HTTPS), затем этот файл.
 
@@ -50,14 +60,14 @@ SSH на origin — **только с LAN** (`10.0.0.0/24`). GitHub-hosted runne
 ```bash
 sudo adduser --disabled-password --gecos '' toolcraft-deploy
 
-sudo mkdir -p /var/www/toolcraft.ermolaev.site/demos
+sudo mkdir -p /var/www/toolcraft.ermolaev.site
 sudo chown -R toolcraft-deploy:www-data /var/www/toolcraft.ermolaev.site
 sudo chmod -R u+rwX,g+rX,o+rX /var/www/toolcraft.ermolaev.site
 ```
 
 Пишет только **`toolcraft-deploy`**, без `sudo`. Отдельного sudoers не нужно.  
 Nginx читает от **`www-data`**.  
-Права нужны только на каталог сайта: служебные `.staging.*`, `.previous.*` и `.failed.*` появляются внутри него. Владельца `/var/www` менять не нужно.
+Права нужны только на каталог сайта: служебные `.staging.*`, `.previous.*`, `.activating.*`, `.failed.*`, `.publish-incoming` и `.publish-parked` появляются внутри него. Владельца `/var/www` менять не нужно.
 
 На origin уже должен быть Node (как для `uno`); job дополнительно ставит Node 24 и pnpm 12 через Actions от имени `toolcraft-deploy`.
 
@@ -115,16 +125,16 @@ flowchart LR
 2. `pnpm/action-setup@v6` + `actions/setup-node@v7` (pnpm 12, Node 24)
 3. `bash scripts/publish-site.test.sh`
 4. `pnpm install --frozen-lockfile`
-5. `pnpm run build:examples` — `scripts/build-examples.mjs`, по два example сразу (`BUILD_CONCURRENCY`, по умолчанию 2); каждому передаётся `--base /demos/<папка>/`
-6. `SITE_ROOT=… SITE_URL=… bash scripts/publish-site.sh` — проверка `dist` и URL скрипта/стиля, сборка `dist-site/`, замена каталога `demos`, smoke
+5. `pnpm run build:examples` — `scripts/build-examples.mjs`, по два example сразу (`BUILD_CONCURRENCY`, по умолчанию 2); каждому передаётся `--base /<папка>/`
+6. `SITE_ROOT=… SITE_URL=… bash scripts/publish-site.sh` — проверка `dist` и URL скрипта/стиля, сборка `dist-site/`, замена управляемых файлов в корне сайта, smoke
 
 `SITE_ROOT` и `SITE_URL` задаются в workflow. Без них скрипт не публикует. `SITE_ROOT` — абсолютный путь без завершающего слэша, не `/` и без сегментов `.` / `..`. Каталог уже должен существовать, быть обычной директорией (не symlink) и быть доступным на запись. `SITE_URL` — origin без пути, например `https://toolcraft.ermolaev.site`.
 
-Выкладка меняет только `$SITE_ROOT/demos`. Staging — `$SITE_ROOT/.staging.<pid>`, предыдущее дерево — `$SITE_ROOT/.previous.<pid>`. Если процесс обрывается после того, как живой `demos` уже сдвинут, ловушка `EXIT` возвращает его на место. Smoke идёт по `SITE_URL` до удаления previous. Файл `$SITE_ROOT/demos/.publish-ok` пишется только после успешного smoke; пока его нет, следующий запуск возвращает единственный `.previous.*`, а не удаляет его. Несколько `.previous.*` без этого маркера — ошибка, каталоги не трогаются.
+Выкладка меняет в `$SITE_ROOT` каталог `index.html`, папки демо, маркеры `.publish-ok` / `.publish-demos` и убирает устаревший `demos/` при наличии. Перед переносом скрипт записывает план `.publish-incoming` (по одному slug на строку) и не двигает запись, которая лежит на другой файловой системе, чем `SITE_ROOT`. Staging — `$SITE_ROOT/.staging.<pid>`, промежуточный activate — `$SITE_ROOT/.activating.<pid>`, предыдущее дерево — `$SITE_ROOT/.previous.<pid>`. Файл `.publish-parked` появляется, когда старые записи уже целиком лежат в previous. Обрыв после начала переноса возвращает это дерево: ловушка `EXIT` делает это сразу, следующий запуск — если процесс умер без ловушки. Пока на корне нет `.publish-ok`, единственный `.previous.*` восстанавливается заменой каталогов, а не удаляется. Живой `demos/.publish-ok` без `.publish-incoming` — уже выложенный старый сайт: снимок удаляется, `demos/` не разбирается. Несколько `.previous.*` без маркера успеха — ошибка, каталоги не трогаются. Smoke идёт по `SITE_URL` до удаления previous. Сначала пишется `.publish-demos`, затем `.publish-ok`, и только после успешного smoke.
 
-Smoke: первый ответ `/` — HTTP-редирект, и `Location` ведёт на `/demos/` того же хоста (относительный путь тоже годится). Затем каталог, каждая демо-страница и **каждый** её `script`/`link` под `/demos/<имя>/`. Ответ ассета не должен быть HTML: ни по `Content-Type`, ни телом, совпадающим с оболочкой демо. Ошибка smoke возвращает предыдущий `demos`. Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`).
+Smoke: `/` отдаёт каталог со ссылками `/{name}/`, затем каждая демо-страница и **каждый** её `script`/`link` под `/{name}/`. Ответ ассета не должен быть HTML: ни по `Content-Type`, ни телом, совпадающим с оболочкой демо. Ошибка smoke возвращает предыдущее дерево. Новый push в `main` **не** отменяет уже идущую выкладку (`cancel-in-progress: false`).
 
-Корень `/` в файлы сайта не записывается. Редирект делает origin Nginx: `location = / { return 302 /demos/; }`. На origin отсутствующий `.js`/`.css` и прочая статика должны отвечать `404`, а пути с `/.` (снимки выкладки) — `deny`. Иначе SPA отдаёт `index.html` с кодом 200, и VPS кэширует его как ассет. После правки vhost его нужно заново скопировать на origin и сделать `nginx -t` и reload; сам VPS-файл не меняется. Reload после обычной выкладки статики **не** нужен.
+На origin: `/` → `index.html` каталога; `/demos` и `/demos/…` → 301 на путь без префикса; отсутствующий `.js`/`.css` и прочая статика должны отвечать `404`, а пути с `/.` (снимки выкладки) — `deny`. Иначе SPA отдаёт `index.html` с кодом 200, и VPS кэширует его как ассет. На VPS не должно быть пустого `location ^~ /demos/` без `proxy_pass`. После правки vhost скопируйте файл на origin и/или VPS и сделайте `nginx -t` и reload (см. server `servers/toolcraft.ermolaev.site.md`). Reload после обычной выкладки статики **не** нужен.
 
 ---
 
@@ -145,13 +155,13 @@ Smoke: первый ответ `/` — HTTP-редирект, и `Location` ве
 pnpm --filter glass run build
 ```
 
-Так `base` остаётся тем, что в `vite.config` (часто `/`). Сборка, которую примет публикация:
+Так `base` остаётся тем, что в `vite.config` (часто `/`). Сборка, которую примет публикация сайта:
 
 ```bash
-pnpm --filter glass run build -- --base /demos/glass/
+pnpm --filter glass run build -- --base /glass/
 ```
 
-Новый example: папка `examples/<name>` со своим `vercel.json` (`--base /demos/<name>/`). Подписанный `vite.config.ts` не менять. Push в `main`. Отдельный vhost и DNS не нужны (см. server-инструкцию).
+Новый example: папка `examples/<name>` (для сайта достаточно `package.json` и сборки через `build-examples.mjs`). `vercel.json` с `--base /demos/<name>/` можно оставить как есть для Vercel. Подписанный `vite.config.ts` не менять. Push в `main`. Отдельный vhost и DNS не нужны (см. server-инструкцию).
 
 Локальная выкладка на origin (редко):
 
@@ -172,11 +182,11 @@ bash scripts/publish-site.sh
 
 ```bash
 curl -sI https://toolcraft.ermolaev.site/ | head
+curl -sI https://toolcraft.ermolaev.site/glass/ | head
 curl -sI https://toolcraft.ermolaev.site/demos/glass/ | head
-curl -sI https://toolcraft.ermolaev.site/demos/ | head
 ```
 
-У `/` ожидается `301`, `302`, `307` или `308` и `Location` с путём `/demos/`. В браузере: `https://toolcraft.ermolaev.site/` открывает `/demos/`, дальше `…/demos/glass/`, `…/demos/ascii/`.
+У `/` ожидается `200` и HTML-каталог. В браузере: `https://toolcraft.ermolaev.site/` открывает список, дальше `…/glass/`, `…/ascii/`. Старый `…/demos/glass/` отвечает `301` на `…/glass/`.
 
 Кэш HIT на `.js`/`.css` и отсутствие долгого HIT на HTML — на стороне VPS; детали в server-инструкции.
 
@@ -186,7 +196,7 @@ curl -sI https://toolcraft.ermolaev.site/demos/ | head
 
 | # | Где | Что |
 | --- | --- | --- |
-| 1 | server-репозиторий | DNS + origin + VPS по `servers/toolcraft.ermolaev.site.md` |
+| 1 | `G:\domains\server` | DNS + origin/VPS nginx по `servers/toolcraft.ermolaev.site.md` и файлам vhost в `home-nginx` / `vps-nginx (https)` |
 | 2 | origin | `toolcraft-deploy` + self-hosted runner (этот файл, п. 1) |
 | 3 | GitHub | push в `main` → workflow |
-| 4 | браузер | `https://toolcraft.ermolaev.site/demos/<folder>/` |
+| 4 | браузер | `https://toolcraft.ermolaev.site/<folder>/` |

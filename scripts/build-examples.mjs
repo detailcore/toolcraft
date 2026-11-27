@@ -61,7 +61,7 @@ function runPnpm(args) {
 }
 
 async function buildExample(name) {
-  const base = `/demos/${name}/`;
+  const base = `/${name}/`;
   console.log(`build ${name} --base ${base}`);
   // pnpm run forwards extras as `vite build -- --base …` for `tsc && vite build`
   // scripts; Vite then ignores --base. Typecheck via the package script, then call

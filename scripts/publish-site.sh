@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Assemble examples/*/dist into dist-site/demos/<name>/ and publish that tree
-# as $SITE_ROOT/demos. The site directory itself stays in place, so the deploy
-# user only needs write access inside SITE_ROOT.
-# `/` is not a published file: origin nginx returns 302 /demos/.
+# Assemble examples/*/dist into dist-site/<name>/ plus a root catalog index.html,
+# then publish that tree into $SITE_ROOT. The site directory itself stays in
+# place, so the deploy user only needs write access inside SITE_ROOT.
+# Origin nginx serves `/` as the catalog and `/{name}/` as each demo SPA;
+# `/demos/...` is redirected away from the old prefix.
 set -euo pipefail
 
 PUBLISH_PHASE=""
@@ -11,6 +12,10 @@ PUBLISH_PREVIOUS=""
 PUBLISH_DEMOS=()
 FETCH_CONTENT_TYPE=""
 PUBLISH_OK_NAME=".publish-ok"
+PUBLISH_DEMOS_NAME=".publish-demos"
+PUBLISH_INCOMING_NAME=".publish-incoming"
+PUBLISH_PARKED_NAME=".publish-parked"
+PUBLISH_MANAGED=()
 
 publish_root() {
   local dir
@@ -20,10 +25,6 @@ publish_root() {
     dir="$(dirname "${BASH_SOURCE[0]}")/.."
   fi
   (cd "$dir" && pwd)
-}
-
-live_demos() {
-  printf '%s\n' "$SITE_ROOT/demos"
 }
 
 validate_site_root() {
@@ -69,8 +70,6 @@ filesystem_id() {
 }
 
 assert_publish_target() {
-  local live root_id live_id
-  live="$(live_demos)"
   if [[ ! -d "$SITE_ROOT" ]]; then
     echo "error: SITE_ROOT must already exist (create it and chown it to the deploy user): $SITE_ROOT" >&2
     return 1
@@ -83,22 +82,6 @@ assert_publish_target() {
     echo "error: SITE_ROOT is not writable by the deploy user: $SITE_ROOT" >&2
     return 1
   fi
-  if [[ -L "$live" ]]; then
-    echo "error: $live must be a real directory, not a symlink" >&2
-    return 1
-  fi
-  if [[ -e "$live" && ! -d "$live" ]]; then
-    echo "error: $live exists and is not a directory" >&2
-    return 1
-  fi
-  if [[ -d "$live" ]]; then
-    root_id="$(filesystem_id "$SITE_ROOT")"
-    live_id="$(filesystem_id "$live")"
-    if [[ -n "$root_id" && -n "$live_id" && "$root_id" != "$live_id" ]]; then
-      echo "error: demos is on a different filesystem from SITE_ROOT; refusing a non-atomic replace: $live" >&2
-      return 1
-    fi
-  fi
 }
 
 demo_re() {
@@ -110,7 +93,7 @@ demo_re() {
 demo_asset_grep_pattern() {
   local name_re
   name_re="$(demo_re "$1")"
-  printf '%s\n' "<(script|link)[^>]*(src|href)=[\"']/demos/${name_re}/[^\"']+[\"']"
+  printf '%s\n' "<(script|link)[^>]*(src|href)=[\"']/${name_re}/[^\"']+[\"']"
 }
 
 demo_html_has_asset() {
@@ -124,7 +107,7 @@ collect_asset_urls() {
   local name="$2"
   local name_re line rest url regex
   name_re="$(demo_re "$name")"
-  regex="(src|href)=[\"'](/demos/${name_re}/[^\"']+)[\"']"
+  regex="(src|href)=[\"'](/${name_re}/[^\"']+)[\"']"
   while IFS= read -r line; do
     rest="$line"
     while [[ "$rest" =~ $regex ]]; do
@@ -195,7 +178,7 @@ assert_example_dist() {
       return 1
     fi
     if ! demo_html_has_asset "$index" "$name"; then
-      echo "error: examples/$name/dist/index.html has no script/link URL under /demos/$name/ (build without --base /demos/$name/?)" >&2
+      echo "error: examples/$name/dist/index.html has no script/link URL under /$name/ (build without --base /$name/?)" >&2
       return 1
     fi
   done
@@ -206,55 +189,297 @@ write_dist_site() {
   local dest="$2"
   local name
   rm -rf -- "$dest" || return 1
-  mkdir -p "$dest/demos" || return 1
+  mkdir -p "$dest" || return 1
   {
     printf '%s\n' '<!doctype html><title>Toolcraft demos</title><h1>demos</h1><ol>' || return 1
     for name in "${PUBLISH_DEMOS[@]}"; do
-      mkdir -p "$dest/demos/$name" || return 1
-      cp -a "$root/examples/$name/dist/." "$dest/demos/$name/" || return 1
-      printf '<li><a href="/demos/%s/">/demos/%s/</a></li>\n' "$name" "$name" || return 1
+      mkdir -p "$dest/$name" || return 1
+      cp -a "$root/examples/$name/dist/." "$dest/$name/" || return 1
+      printf '<li><a href="/%s/">/%s/</a></li>\n' "$name" "$name" || return 1
     done
     printf '%s\n' '</ol>' || return 1
-  } >"$dest/demos/index.html"
+  } >"$dest/index.html"
 }
 
 remove_staging() {
   local staging="${PUBLISH_STAGING:-}"
   [[ -n "$staging" && -n "${SITE_ROOT:-}" ]] || return 0
-  [[ "$staging" == "$SITE_ROOT/.staging."* ]] || return 0
+  case "$staging" in
+    "$SITE_ROOT"/.staging.*|"$SITE_ROOT"/.activating.*) ;;
+    *) return 0 ;;
+  esac
   rm -rf -- "$staging"
 }
 
-restore_parked_site() {
-  local live
-  live="$(live_demos)"
-  if [[ ! -e "$live" && -d "$PUBLISH_PREVIOUS" ]]; then
-    command mv "$PUBLISH_PREVIOUS" "$live" || true
-  fi
-  if [[ -e "$live" ]]; then
-    remove_staging
-  fi
+is_entry_name() {
+  local name="$1"
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$name" != "." && "$name" != ".." ]] || return 1
+  [[ "$name" != "$PUBLISH_INCOMING_NAME" && "$name" != "$PUBLISH_PARKED_NAME" ]] || return 1
 }
 
-rollback_swapped_site() {
-  local live failed
-  live="$(live_demos)"
-  failed="$SITE_ROOT/.failed.$$"
-  if [[ -e "$live" ]]; then
-    command mv "$live" "$failed" || true
-  fi
-  if [[ -d "$PUBLISH_PREVIOUS" ]]; then
-    if ! command mv "$PUBLISH_PREVIOUS" "$live"; then
-      if [[ ! -e "$live" && -d "$failed" ]]; then
-        command mv "$failed" "$live" || true
-      fi
-      return
+list_previous_demo_names() {
+  local manifest="$SITE_ROOT/$PUBLISH_DEMOS_NAME"
+  local name
+  [[ -f "$manifest" ]] || return 0
+  while IFS= read -r name || [[ -n "$name" ]]; do
+    name="${name%$'\r'}"
+    [[ -n "$name" ]] || continue
+    if ! is_entry_name "$name"; then
+      echo "error: $PUBLISH_DEMOS_NAME contains an unsafe name: $name" >&2
+      return 1
     fi
+    printf '%s\n' "$name"
+  done <"$manifest"
+}
+
+list_managed_entry_names() {
+  local name
+  printf '%s\n' "index.html" "$PUBLISH_OK_NAME" "$PUBLISH_DEMOS_NAME" "demos"
+  for name in "${PUBLISH_DEMOS[@]}"; do
+    printf '%s\n' "$name"
+  done
+  list_previous_demo_names
+}
+
+collect_managed_names() {
+  local tmp line
+  local -A seen=()
+  tmp="$(mktemp)"
+  if ! list_managed_entry_names >"$tmp"; then
+    rm -f -- "$tmp"
+    return 1
   fi
-  if [[ -e "$live" || ! -d "$PUBLISH_PREVIOUS" ]]; then
-    rm -rf -- "$failed"
-    remove_staging
+  PUBLISH_MANAGED=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    [[ -n "${seen[$line]+x}" ]] && continue
+    if ! is_entry_name "$line"; then
+      echo "error: refusing to publish unsafe path entry: $line" >&2
+      rm -f -- "$tmp"
+      return 1
+    fi
+    seen["$line"]=1
+    PUBLISH_MANAGED+=("$line")
+  done <"$tmp"
+  rm -f -- "$tmp"
+}
+
+assert_managed_filesystem() {
+  local root_id path_id name src
+  root_id="$(filesystem_id "$SITE_ROOT")"
+  for name in "${PUBLISH_MANAGED[@]}"; do
+    src="$SITE_ROOT/$name"
+    [[ -e "$src" && ! -L "$src" ]] || continue
+    path_id="$(filesystem_id "$src")"
+    if [[ -n "$root_id" && -n "$path_id" && "$root_id" != "$path_id" ]]; then
+      echo "error: $src is on a different filesystem from SITE_ROOT; refusing a non-atomic replace" >&2
+      return 1
+    fi
+  done
+}
+
+write_lines_file() {
+  local dest="$1"
+  local tmp="$dest.tmp.$$"
+  shift
+  local name
+  : >"$tmp" || return 1
+  for name in "$@"; do
+    printf '%s\n' "$name" >>"$tmp" || {
+      rm -f -- "$tmp"
+      return 1
+    }
+  done
+  chmod a+r "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  command mv -- "$tmp" "$dest" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+}
+
+write_incoming_plan() {
+  write_lines_file "$SITE_ROOT/$PUBLISH_INCOMING_NAME" "${PUBLISH_MANAGED[@]}"
+}
+
+write_parked_marker() {
+  write_lines_file "$SITE_ROOT/$PUBLISH_PARKED_NAME" "parked"
+}
+
+relocate_entry() {
+  command mv "$@"
+}
+
+snapshot_entry_names() {
+  local src="$1"
+  local item base
+  local -a items=()
+  shopt -s nullglob
+  items=("$src"/* "$src"/.[!.]* "$src"/..?*)
+  shopt -u nullglob
+  for item in "${items[@]}"; do
+    [[ -e "$item" || -L "$item" ]] || continue
+    base="$(basename "$item")"
+    [[ "$base" == "." || "$base" == ".." ]] && continue
+    printf '%s\n' "$base"
+  done
+}
+
+undo_snapshot_apply() {
+  local src="$1"
+  local trash="$2"
+  shift 2
+  local name
+  for name in "$@"; do
+    if [[ -e "$SITE_ROOT/$name" || -L "$SITE_ROOT/$name" ]]; then
+      command mv -- "$SITE_ROOT/$name" "$src/$name" || true
+    fi
+    if [[ -e "$trash/$name" || -L "$trash/$name" ]]; then
+      command mv -- "$trash/$name" "$SITE_ROOT/$name" || true
+    fi
+  done
+  rmdir -- "$trash" 2>/dev/null || true
+}
+
+apply_snapshot() {
+  local src="$1"
+  local drop_extra="$2"
+  local trash="$SITE_ROOT/.failed.$$"
+  local -a names=()
+  local -a applied=()
+  local -a extras=()
+  local -A in_snapshot=()
+  local name dest extra
+
+  while IFS= read -r name || [[ -n "$name" ]]; do
+    [[ -n "$name" ]] || continue
+    if ! is_entry_name "$name"; then
+      echo "error: snapshot entry is not a safe name: $name" >&2
+      return 1
+    fi
+    names+=("$name")
+    in_snapshot["$name"]=1
+  done < <(snapshot_entry_names "$src")
+
+  if [[ "$drop_extra" == "true" && -f "$SITE_ROOT/$PUBLISH_INCOMING_NAME" ]]; then
+    while IFS= read -r name || [[ -n "$name" ]]; do
+      name="${name%$'\r'}"
+      [[ -n "$name" ]] || continue
+      if ! is_entry_name "$name"; then
+        echo "error: $PUBLISH_INCOMING_NAME contains an unsafe name: $name" >&2
+        return 1
+      fi
+    done <"$SITE_ROOT/$PUBLISH_INCOMING_NAME"
   fi
+
+  mkdir -p "$trash" || return 1
+  for name in "${names[@]+"${names[@]}"}"; do
+    dest="$SITE_ROOT/$name"
+    if [[ -e "$dest" || -L "$dest" ]]; then
+      command mv -- "$dest" "$trash/$name" || {
+        undo_snapshot_apply "$src" "$trash" "${applied[@]+"${applied[@]}"}"
+        return 1
+      }
+    fi
+    if ! command mv -- "$src/$name" "$dest"; then
+      if [[ -e "$trash/$name" || -L "$trash/$name" ]]; then
+        command mv -- "$trash/$name" "$dest" || true
+      fi
+      undo_snapshot_apply "$src" "$trash" "${applied[@]+"${applied[@]}"}"
+      return 1
+    fi
+    applied+=("$name")
+  done
+
+  if [[ "$drop_extra" == "true" && -f "$SITE_ROOT/$PUBLISH_INCOMING_NAME" ]]; then
+    while IFS= read -r extra || [[ -n "$extra" ]]; do
+      extra="${extra%$'\r'}"
+      [[ -n "$extra" ]] || continue
+      [[ -n "${in_snapshot[$extra]+x}" ]] && continue
+      dest="$SITE_ROOT/$extra"
+      [[ -e "$dest" || -L "$dest" ]] || continue
+      if ! command mv -- "$dest" "$trash/$extra"; then
+        undo_snapshot_apply "$src" "$trash" "${applied[@]+"${applied[@]}"}" "${extras[@]+"${extras[@]}"}"
+        return 1
+      fi
+      extras+=("$extra")
+    done <"$SITE_ROOT/$PUBLISH_INCOMING_NAME"
+  fi
+
+  if ! rmdir -- "$src"; then
+    echo "error: snapshot $src was not empty after restore" >&2
+    return 1
+  fi
+  rm -rf -- "$trash" || return 1
+  rm -f -- "$SITE_ROOT/$PUBLISH_INCOMING_NAME" "$SITE_ROOT/$PUBLISH_PARKED_NAME" || return 1
+  remove_staging
+  remove_work_globs
+  remove_failed_globs
+}
+
+restore_previous_snapshot() {
+  local src="$1"
+  local drop="false"
+  [[ -d "$src" ]] || return 0
+  if [[ -f "$SITE_ROOT/$PUBLISH_PARKED_NAME" ]]; then
+    drop="true"
+  fi
+  apply_snapshot "$src" "$drop"
+}
+
+park_managed_entries() {
+  local dest="$1"
+  local name src
+  for name in "${PUBLISH_MANAGED[@]}"; do
+    src="$SITE_ROOT/$name"
+    [[ -e "$src" || -L "$src" ]] || continue
+    relocate_entry -- "$src" "$dest/$name" || return 1
+  done
+}
+
+promote_staging_entries() {
+  local item base
+  local -a items=()
+  shopt -s nullglob
+  items=("$PUBLISH_STAGING"/* "$PUBLISH_STAGING"/.[!.]* "$PUBLISH_STAGING"/..?*)
+  shopt -u nullglob
+  for item in "${items[@]}"; do
+    [[ -e "$item" || -L "$item" ]] || continue
+    base="$(basename "$item")"
+    if ! is_entry_name "$base"; then
+      echo "error: staged entry is not a safe name: $base" >&2
+      return 1
+    fi
+    relocate_entry -- "$item" "$SITE_ROOT/$base" || return 1
+  done
+  rmdir -- "$PUBLISH_STAGING" || return 1
+  PUBLISH_STAGING=""
+}
+
+remove_work_globs() {
+  local item
+  local -a leftovers=()
+  shopt -s nullglob
+  leftovers=("$SITE_ROOT"/.staging.* "$SITE_ROOT"/.activating.*)
+  shopt -u nullglob
+  for item in "${leftovers[@]+"${leftovers[@]}"}"; do
+    rm -rf -- "$item"
+  done
+  PUBLISH_STAGING=""
+}
+
+remove_failed_globs() {
+  local item
+  local -a leftovers=()
+  shopt -s nullglob
+  leftovers=("$SITE_ROOT"/.failed.*)
+  shopt -u nullglob
+  for item in "${leftovers[@]+"${leftovers[@]}"}"; do
+    rm -rf -- "$item"
+  done
 }
 
 publish_on_exit() {
@@ -262,8 +487,11 @@ publish_on_exit() {
   trap - EXIT
   set +e
   case "${PUBLISH_PHASE:-}" in
-    demos_aside) restore_parked_site ;;
-    swapped) rollback_swapped_site ;;
+    parking|demos_aside|swapped)
+      if [[ -n "${PUBLISH_PREVIOUS:-}" ]]; then
+        restore_previous_snapshot "$PUBLISH_PREVIOUS"
+      fi
+      ;;
     staging) remove_staging ;;
   esac
   exit "$status"
@@ -273,7 +501,7 @@ remove_snapshot_globs() {
   local item
   local -a leftovers=()
   shopt -s nullglob
-  leftovers=("$SITE_ROOT/.previous."* "$SITE_ROOT/.staging."* "$SITE_ROOT/.failed."*)
+  leftovers=("$SITE_ROOT/.previous."* "$SITE_ROOT/.staging."* "$SITE_ROOT/.activating."* "$SITE_ROOT/.failed."*)
   shopt -u nullglob
   for item in "${leftovers[@]}"; do
     rm -rf -- "$item"
@@ -281,23 +509,23 @@ remove_snapshot_globs() {
 }
 
 recover_orphaned_previous() {
-  local live failed item
+  local item
   local -a leftovers=()
-  live="$(live_demos)"
   shopt -s nullglob
-  leftovers=("$SITE_ROOT/.previous."*)
+  leftovers=("$SITE_ROOT"/.previous.*)
   shopt -u nullglob
 
-  if [[ -d "$live" && -f "$live/$PUBLISH_OK_NAME" ]]; then
+  if [[ -f "$SITE_ROOT/$PUBLISH_OK_NAME" ]]; then
+    remove_snapshot_globs
+    rm -f -- "$SITE_ROOT/$PUBLISH_INCOMING_NAME" "$SITE_ROOT/$PUBLISH_PARKED_NAME"
+    return 0
+  fi
+  if [[ -f "$SITE_ROOT/demos/$PUBLISH_OK_NAME" && ! -f "$SITE_ROOT/$PUBLISH_INCOMING_NAME" && ! -f "$SITE_ROOT/$PUBLISH_PARKED_NAME" ]]; then
     remove_snapshot_globs
     return 0
   fi
-  if [[ -e "$live" && ! -d "$live" ]]; then
-    echo "error: $live exists and is not a directory" >&2
-    return 1
-  fi
   if [[ ${#leftovers[@]} -gt 1 ]]; then
-    echo "error: $live has no committed publish marker and more than one previous snapshot exists" >&2
+    echo "error: SITE_ROOT has no committed publish marker and more than one previous snapshot exists" >&2
     return 1
   fi
   if [[ ${#leftovers[@]} -eq 1 ]]; then
@@ -305,21 +533,11 @@ recover_orphaned_previous() {
       echo "error: previous snapshot is not a directory: ${leftovers[0]}" >&2
       return 1
     fi
-    failed="$SITE_ROOT/.failed.$$"
-    if [[ -e "$live" ]]; then
-      command mv "$live" "$failed" || return 1
-    fi
-    if ! command mv "${leftovers[0]}" "$live"; then
-      if [[ ! -e "$live" && -d "$failed" ]]; then
-        command mv "$failed" "$live" || true
-      fi
-      return 1
-    fi
-    rm -rf -- "$failed"
-    echo "restored demos from ${leftovers[0]}" >&2
+    restore_previous_snapshot "${leftovers[0]}" || return 1
+    echo "restored site from ${leftovers[0]}" >&2
   fi
   shopt -s nullglob
-  leftovers=("$SITE_ROOT/.staging."*)
+  leftovers=("$SITE_ROOT"/.staging.* "$SITE_ROOT"/.activating.*)
   shopt -u nullglob
   for item in "${leftovers[@]}"; do
     rm -rf -- "$item"
@@ -338,110 +556,52 @@ stage_dist() {
   trap publish_on_exit EXIT
   remove_staging
   mkdir -p "$PUBLISH_STAGING" || return 1
-  cp -a "$dist/demos/." "$PUBLISH_STAGING/" || return 1
+  cp -a "$dist"/. "$PUBLISH_STAGING/" || return 1
   chmod -R a+rX "$PUBLISH_STAGING" || return 1
 }
 
 activate_staged_tree() {
-  local live
-  live="$(live_demos)"
-  if [[ -e "$live" ]]; then
-    command mv "$live" "$PUBLISH_PREVIOUS" || return 1
-    PUBLISH_PHASE=demos_aside
-    if declare -F publish_after_park >/dev/null; then
-      publish_after_park || return 1
-    fi
+  local activating="$SITE_ROOT/.activating.$$"
+  collect_managed_names || return 1
+  assert_managed_filesystem || return 1
+  rm -rf -- "$PUBLISH_PREVIOUS" "$activating"
+  mkdir -p "$PUBLISH_PREVIOUS" || return 1
+  if ! write_incoming_plan; then
+    rmdir -- "$PUBLISH_PREVIOUS" 2>/dev/null || rm -rf -- "$PUBLISH_PREVIOUS"
+    return 1
   fi
-  move_into_place "$PUBLISH_STAGING" "$live" || return 1
+  PUBLISH_PHASE=parking
+  if ! park_managed_entries "$PUBLISH_PREVIOUS"; then
+    return 1
+  fi
+  if ! write_parked_marker; then
+    return 1
+  fi
+  PUBLISH_PHASE=demos_aside
+  if declare -F publish_after_park >/dev/null; then
+    publish_after_park || return 1
+  fi
+  move_into_place "$PUBLISH_STAGING" "$activating" || return 1
+  PUBLISH_STAGING="$activating"
+  promote_staging_entries || return 1
   PUBLISH_PHASE=swapped
 }
 
 commit_publish() {
-  local live item
-  live="$(live_demos)"
-  printf '%s\n' "ok" >"$live/$PUBLISH_OK_NAME" || return 1
-  chmod a+r "$live/$PUBLISH_OK_NAME" || return 1
+  local item
+  local -a leftovers=()
+  write_lines_file "$SITE_ROOT/$PUBLISH_DEMOS_NAME" "${PUBLISH_DEMOS[@]}" || return 1
+  write_lines_file "$SITE_ROOT/$PUBLISH_OK_NAME" "ok" || return 1
+  rm -f -- "$SITE_ROOT/$PUBLISH_INCOMING_NAME" "$SITE_ROOT/$PUBLISH_PARKED_NAME" || return 1
   PUBLISH_PHASE=committed
   trap - EXIT
   shopt -s nullglob
-  local -a leftovers=("$SITE_ROOT/.previous."*)
+  leftovers=("$SITE_ROOT"/.previous.*)
   shopt -u nullglob
-  for item in "${leftovers[@]}"; do
+  for item in "${leftovers[@]+"${leftovers[@]}"}"; do
     rm -rf -- "$item" || return 1
   done
   PUBLISH_STAGING=""
-}
-
-location_path() {
-  local loc="$1"
-  loc="${loc%%$'\r'*}"
-  loc="${loc%%\?*}"
-  loc="${loc%%#*}"
-  if [[ "$loc" == http://* || "$loc" == https://* ]]; then
-    loc="${loc#*://}"
-    loc="/${loc#*/}"
-  fi
-  if [[ "$loc" != /* ]]; then
-    printf '\n'
-    return 0
-  fi
-  [[ "$loc" == */ ]] || loc="${loc}/"
-  printf '%s\n' "$loc"
-}
-
-redirect_host() {
-  local url="$1"
-  url="${url#*://}"
-  url="${url%%/*}"
-  url="${url##*@}"
-  printf '%s\n' "${url,,}"
-}
-
-assert_redirect_location() {
-  local loc="$1"
-  local path origin_host loc_host
-  loc="${loc%%$'\r'*}"
-  if [[ -z "$loc" ]]; then
-    echo "error: ${SITE_URL}/ redirected to '<empty>', expected /demos/ on ${SITE_URL}" >&2
-    return 1
-  fi
-  if [[ "$loc" == //* ]]; then
-    echo "error: ${SITE_URL}/ redirected to '$loc', expected /demos/ on ${SITE_URL}" >&2
-    return 1
-  fi
-  if [[ "$loc" == http://* || "$loc" == https://* ]]; then
-    origin_host="$(redirect_host "$SITE_URL")"
-    loc_host="$(redirect_host "$loc")"
-    if [[ "$loc_host" != "$origin_host" ]]; then
-      echo "error: ${SITE_URL}/ redirected to '$loc', expected /demos/ on ${SITE_URL}" >&2
-      return 1
-    fi
-  elif [[ "$loc" != /* ]]; then
-    echo "error: ${SITE_URL}/ redirected to '$loc', expected /demos/ on ${SITE_URL}" >&2
-    return 1
-  fi
-  path="$(location_path "$loc")"
-  if [[ "$path" != "/demos/" ]]; then
-    echo "error: ${SITE_URL}/ redirected to '$loc', expected /demos/" >&2
-    return 1
-  fi
-}
-
-assert_root_redirect() {
-  local headers status location
-  headers="$(mktemp)"
-  status="$(curl -sS --retry 2 --retry-delay 1 -D "$headers" -o /dev/null -w '%{http_code}' "${SITE_URL}/")" || {
-    rm -f -- "$headers"
-    echo "error: failed to request ${SITE_URL}/" >&2
-    return 1
-  }
-  location="$(tr -d '\r' <"$headers" | awk 'tolower($1) == "location:" { print $2 }' | tail -n 1)"
-  rm -f -- "$headers"
-  if [[ "$status" != 301 && "$status" != 302 && "$status" != 307 && "$status" != 308 ]]; then
-    echo "error: ${SITE_URL}/ expected an HTTP redirect, got ${status}" >&2
-    return 1
-  fi
-  assert_redirect_location "$location"
 }
 
 fetch_url() {
@@ -503,21 +663,20 @@ smoke_site_checks() {
   local work="$1"
   local name asset asset_url
   local -a assets=()
-  assert_root_redirect || return 1
-  fetch_url "${SITE_URL}/demos/" "$work/catalog.html" || return 1
+  fetch_url "${SITE_URL}/" "$work/catalog.html" || return 1
   for name in "${PUBLISH_DEMOS[@]}"; do
-    if ! grep -Fq "href=\"/demos/${name}/\"" "$work/catalog.html"; then
-      echo "error: ${SITE_URL}/demos/ is missing href=\"/demos/${name}/\"" >&2
+    if ! grep -Fq "href=\"/${name}/\"" "$work/catalog.html"; then
+      echo "error: ${SITE_URL}/ is missing href=\"/${name}/\"" >&2
       return 1
     fi
-    fetch_url "${SITE_URL}/demos/${name}/" "$work/${name}.html" || return 1
+    fetch_url "${SITE_URL}/${name}/" "$work/${name}.html" || return 1
     if ! demo_html_has_asset "$work/${name}.html" "$name"; then
-      echo "error: ${SITE_URL}/demos/${name}/ has no script or link asset under /demos/${name}/" >&2
+      echo "error: ${SITE_URL}/${name}/ has no script or link asset under /${name}/" >&2
       return 1
     fi
     mapfile -t assets < <(collect_asset_urls "$work/${name}.html" "$name")
     if [[ ${#assets[@]} -eq 0 ]]; then
-      echo "error: ${SITE_URL}/demos/${name}/ has no asset URLs under /demos/${name}/" >&2
+      echo "error: ${SITE_URL}/${name}/ has no asset URLs under /${name}/" >&2
       return 1
     fi
     for asset in "${assets[@]}"; do
@@ -557,7 +716,7 @@ publish_site_main() {
   activate_staged_tree || return 1
   smoke_site || return 1
   commit_publish || return 1
-  echo "published ${#PUBLISH_DEMOS[@]} demos to $SITE_ROOT/demos"
+  echo "published ${#PUBLISH_DEMOS[@]} demos to $SITE_ROOT"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
