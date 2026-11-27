@@ -510,6 +510,8 @@ success_site="$success_tmp/www/site"
 mkdir -p "$success_tmp/www"
 seed_site "$success_site"
 prepare_repo "$success_root" "glass" "a.b"
+mkdir -p "$success_root/screenshots"
+node -e "require('fs').writeFileSync(process.argv[1], Buffer.from('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=','base64'))" "$success_root/screenshots/glass.webp"
 success_port="$(start_server "$success_site" "ok")"
 (
   PUBLISH_ROOT="$success_root"
@@ -523,8 +525,9 @@ success_port="$(start_server "$success_site" "ok")"
 [[ -f "$success_site/.publish-ok" ]]
 [[ -f "$success_site/.publish-demos" ]]
 grep -Fq '<ol>' "$success_site/index.html"
-grep -Fq '<li><a href="/glass/">/glass/</a></li>' "$success_site/index.html"
+grep -Fq '<li><a class="card" href="/glass/"><img src="/screenshots/glass.webp" alt="" width="2560" height="1440"><span>/glass/</span></a></li>' "$success_site/index.html"
 grep -Fq '<li><a href="/a.b/">/a.b/</a></li>' "$success_site/index.html"
+cmp -s "$success_root/screenshots/glass.webp" "$success_site/screenshots/glass.webp"
 grep -Fq '/glass/assets/app.js' "$success_site/glass/index.html"
 [[ -f "$success_site/a.b/assets/app.js" ]]
 no_snapshots "$success_site"
@@ -543,6 +546,9 @@ rm -rf -- "$success_root/examples/a.b"
 [[ ! -e "$success_site/a.b" ]]
 [[ -f "$success_site/glass/index.html" ]]
 [[ "$(cat "$success_site/keep")" == "keep" ]]
+grep -Fq 'src="/screenshots/glass.webp"' "$success_site/index.html"
+grep -Fq '<span>/glass/</span>' "$success_site/index.html"
+[[ -f "$success_site/screenshots/glass.webp" ]]
 grep -qx 'glass' "$success_site/.publish-demos"
 if grep -qx 'a.b' "$success_site/.publish-demos"; then
   fail "removed demo stayed in the manifest"

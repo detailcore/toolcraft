@@ -187,17 +187,40 @@ assert_example_dist() {
 write_dist_site() {
   local root="$1"
   local dest="$2"
-  local name
+  local name shot
   rm -rf -- "$dest" || return 1
   mkdir -p "$dest" || return 1
   {
-    printf '%s\n' '<!doctype html><title>Toolcraft demos</title><h1>demos</h1><ol>' || return 1
+    printf '%s\n' \
+      '<!doctype html>' \
+      '<html lang="en">' \
+      '<head>' \
+      '<meta charset="utf-8">' \
+      '<title>Toolcraft demos</title>' \
+      '<style>' \
+      'body{margin:32px;background:#111;color:#eee;font:16px/1.4 system-ui,sans-serif}' \
+      'h1{font-size:20px;font-weight:600;margin:0 0 24px}' \
+      'ol{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(560px,1fr));gap:24px}' \
+      'a.card{color:inherit;text-decoration:none;display:flex;flex-direction:column;gap:8px}' \
+      'a.card img{width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:#000;display:block}' \
+      '</style>' \
+      '</head>' \
+      '<body>' \
+      '<h1>demos</h1>' \
+      '<ol>' || return 1
     for name in "${PUBLISH_DEMOS[@]}"; do
       mkdir -p "$dest/$name" || return 1
       cp -a "$root/examples/$name/dist/." "$dest/$name/" || return 1
-      printf '<li><a href="/%s/">/%s/</a></li>\n' "$name" "$name" || return 1
+      shot="$root/screenshots/$name.webp"
+      if [[ -f "$shot" ]]; then
+        mkdir -p "$dest/screenshots" || return 1
+        cp -a "$shot" "$dest/screenshots/$name.webp" || return 1
+        printf '<li><a class="card" href="/%s/"><img src="/screenshots/%s.webp" alt="" width="2560" height="1440"><span>/%s/</span></a></li>\n' "$name" "$name" "$name" || return 1
+      else
+        printf '<li><a href="/%s/">/%s/</a></li>\n' "$name" "$name" || return 1
+      fi
     done
-    printf '%s\n' '</ol>' || return 1
+    printf '%s\n' '</ol>' '</body>' '</html>' || return 1
   } >"$dest/index.html"
 }
 
@@ -235,7 +258,7 @@ list_previous_demo_names() {
 
 list_managed_entry_names() {
   local name
-  printf '%s\n' "index.html" "$PUBLISH_OK_NAME" "$PUBLISH_DEMOS_NAME" "demos"
+  printf '%s\n' "index.html" "$PUBLISH_OK_NAME" "$PUBLISH_DEMOS_NAME" "demos" "screenshots"
   for name in "${PUBLISH_DEMOS[@]}"; do
     printf '%s\n' "$name"
   done
