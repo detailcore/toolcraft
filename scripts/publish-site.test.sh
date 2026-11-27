@@ -525,7 +525,7 @@ success_port="$(start_server "$success_site" "ok")"
 [[ -f "$success_site/.publish-ok" ]]
 [[ -f "$success_site/.publish-demos" ]]
 grep -Fq '<ol>' "$success_site/index.html"
-grep -Fq '<li><a class="card" href="/glass/"><img src="/screenshots/glass.webp" alt="" width="2560" height="1440"><span>/glass/</span></a></li>' "$success_site/index.html"
+grep -Fq '<li><a class="card" href="/glass/"><img src="/screenshots/glass.webp" alt="" width="1920" height="1080"><span>/glass/</span></a></li>' "$success_site/index.html"
 grep -Fq '<li><a href="/a.b/">/a.b/</a></li>' "$success_site/index.html"
 cmp -s "$success_root/screenshots/glass.webp" "$success_site/screenshots/glass.webp"
 grep -Fq '/glass/assets/app.js' "$success_site/glass/index.html"

@@ -215,7 +215,7 @@ write_dist_site() {
       if [[ -f "$shot" ]]; then
         mkdir -p "$dest/screenshots" || return 1
         cp -a "$shot" "$dest/screenshots/$name.webp" || return 1
-        printf '<li><a class="card" href="/%s/"><img src="/screenshots/%s.webp" alt="" width="2560" height="1440"><span>/%s/</span></a></li>\n' "$name" "$name" "$name" || return 1
+        printf '<li><a class="card" href="/%s/"><img src="/screenshots/%s.webp" alt="" width="1920" height="1080"><span>/%s/</span></a></li>\n' "$name" "$name" "$name" || return 1
       else
         printf '<li><a href="/%s/">/%s/</a></li>\n' "$name" "$name" || return 1
       fi
